@@ -1,0 +1,67 @@
+# azure-pipelines.yml
+
+trigger: none
+pr: none
+
+# Example config to run on a schedule.
+# schedules:
+#   - cron: "0 2 * * *"          # 2 AM UTC daily
+#     displayName: Nightly Applitools sync
+#     branches:
+#       include: [ main ]
+#     always: true                # run even without code changes
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # --- Azure DevOps target ---
+  adoOrg: MyOrg                                          # Azure Devops org name
+  adoProject: "My Test Project"                          # Azure Devops project name
+  planId: "12345"                                        # Azure Devops Test Plan ID
+  suiteId: "45678"                                       # Azure Devops Test Suite ID
+
+  # --- Applitools source ---
+  applitoolsPlanId: aaaaaa00-bb00-cc00-dd00-eeeeeeeeeeee  # Applitools plan UUID
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.11'
+    displayName: Set up Python
+
+  - script: pip install -r scripts/requirements.txt
+    displayName: Install dependencies
+
+  - script: |
+      python -u scripts/run_applitools.py \
+        --plan-id $(applitoolsPlanId) \
+        --output results.json \
+        --poll-interval 15 \
+        --timeout 3600
+    displayName: Execute Applitools plan and fetch results
+    env:
+      APPLITOOLS_API_KEY: $(APPLITOOLS_API_KEY)
+    timeoutInMinutes: 65
+
+  - publish: results.json
+    artifact: applitools-results
+    displayName: Publish transformed results
+    condition: succeededOrFailed()
+
+  - publish: results.json.raw
+    artifact: applitools-raw
+    displayName: Publish raw Applitools response
+    condition: succeededOrFailed()
+
+  - script: |
+      python -u scripts/push_results.py \
+        --org "$(adoOrg)" \
+        --project "$(adoProject)" \
+        --plan $(planId) \
+        --suite $(suiteId) \
+        --results results.json \
+        --run-name "Applitools $(Build.BuildNumber)"
+    displayName: Push results to Azure DevOps Test
+    env:
+      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
